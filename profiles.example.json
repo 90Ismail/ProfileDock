@@ -1,0 +1,5 @@
+[
+  {"label": "Work", "chrome_name": "Work", "color": "#163B70", "initial": "W"},
+  {"label": "Personal", "chrome_name": "Personal", "color": "#21865A", "initial": "P"},
+  {"label": "School", "chrome_name": "School", "color": "#338CC7", "initial": "S"}
+]
