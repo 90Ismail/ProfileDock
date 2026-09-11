@@ -114,8 +114,12 @@ on switchProfile(profileName, configuredIndex, expectedNames)
             set menuCommand to menuCommand & " " & quoted form of (contents of choiceTitle)
         end repeat
         set selectedIndex to (do shell script menuCommand) as integer
-        if selectedIndex > 0 and selectedIndex ≤ (count matchingIDs) then my focusWindow(item selectedIndex of matchingIDs)
-
+        if selectedIndex > 0 and selectedIndex ≤ (count matchingIDs) then
+            my focusWindow(item selectedIndex of matchingIDs)
+        else if selectedIndex < 0 and -selectedIndex ≤ (count matchingIDs) then
+            tell application "Google Chrome" to close window id (item (-selectedIndex) of matchingIDs)
+            my switchProfile(profileName, configuredIndex, expectedNames)
+        end if
     end if
 end switchProfile
 

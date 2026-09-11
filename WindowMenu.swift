@@ -77,7 +77,7 @@ final class PickerController: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
 
     private func buildPanel() {
-        let width: CGFloat = 390
+        let width: CGFloat = 440
         let rowHeight: CGFloat = 48
         let headerHeight: CGFloat = 34
         let footerHeight: CGFloat = 26
@@ -147,7 +147,7 @@ final class PickerController: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
         background.addSubview(hairline(x: 0, y: footerHeight, width: width))
 
-        let footer = NSTextField(labelWithString: "1–9 or ↑↓ + ⏎ to switch · Esc to cancel")
+        let footer = NSTextField(labelWithString: "1–9 or ↑↓ + ⏎ to switch · ⌘W to close · Esc to cancel")
         footer.font = .systemFont(ofSize: 10.5)
         footer.textColor = .tertiaryLabelColor
         footer.alignment = .center
@@ -185,6 +185,12 @@ final class PickerController: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 self.respond(0)
                 return nil
             default:
+                if event.modifierFlags.contains(.command),
+                   event.charactersIgnoringModifiers?.lowercased() == "w" {
+                    let row = self.tableView.selectedRow
+                    if row >= 0 { self.respond(-(row + 1)) }
+                    return nil
+                }
                 if let chars = event.charactersIgnoringModifiers, let n = Int(chars),
                    n >= 1, n <= self.windows.count {
                     self.tableView.selectRowIndexes(IndexSet(integer: n - 1), byExtendingSelection: false)
@@ -244,7 +250,23 @@ final class PickerController: NSObject, NSApplicationDelegate, NSWindowDelegate,
         subtitle.frame = NSRect(x: 62, y: 7, width: max(titleWidth, 40), height: 14)
         cell.addSubview(subtitle)
 
+        let closeButton = NSButton(frame: NSRect(x: (tableColumn?.width ?? 440) - 34, y: 15, width: 18, height: 18))
+        closeButton.bezelStyle = .regularSquare
+        closeButton.isBordered = false
+        closeButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close window")
+        closeButton.contentTintColor = .tertiaryLabelColor
+        closeButton.imageScaling = .scaleProportionallyUpOrDown
+        closeButton.toolTip = "Close this window"
+        closeButton.tag = row
+        closeButton.target = self
+        closeButton.action = #selector(closeButtonTapped(_:))
+        cell.addSubview(closeButton)
+
         return cell
+    }
+
+    @objc private func closeButtonTapped(_ sender: NSButton) {
+        respond(-(sender.tag + 1))
     }
 }
 
