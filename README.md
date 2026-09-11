@@ -9,7 +9,7 @@ Built from a personal collection of AppleScript shortcuts, this public version u
 ## Features
 
 - Separate, recognizable Dock launchers with configurable labels, colors, and initials.
-- Uses Chrome’s built-in profile switching. When a profile has several windows, a chooser lists their titles and tab counts.
+- Uses Chrome’s built-in profile switching. When a profile has several windows, a compact native popup menu lists their titles and tab counts.
 - Matches profile names instead of fragile menu positions.
 - One shared helper for macOS Accessibility permission.
 - Launchers exit after handing off; they do not pretend to track whether a profile is running.
@@ -19,6 +19,7 @@ Built from a personal collection of AppleScript shortcuts, this public version u
 
 - macOS with Google Chrome installed and its interface set to English.
 - Python 3.10+ and Pillow (installed below).
+- Xcode Command Line Tools for the native Swift menu (`xcode-select --install`).
 - Existing Chrome profiles with **unique display names** in Chrome’s Profiles menu.
 
 This is a macOS utility, not a Chrome extension. It does not create accounts or profiles.
@@ -63,13 +64,13 @@ The apps are locally compiled AppleScript apps, not signed or notarized distribu
 
 ## How it works
 
-1. Each launcher reads its own location and passes its `profile.txt` to the neighboring helper.
-2. The helper activates Chrome and waits for its Profiles menu.
-3. It finds exactly one matching menu item and selects it.
-4. It briefly brings each normal Chrome window forward and reads the checked profile menu item to identify membership.
-5. One matching window is focused immediately; multiple matching windows appear in a chooser. Cancel leaves the initially selected profile window in front.
+The helper remembers window/profile membership locally. On a click it reads titles and tab counts without raising windows. Multiple known windows appear in the picker; only selecting a row raises a window. One known window is focused directly. Cancel leaves Chrome windows unchanged.
 
-There is no window database, browser-history reader, or account tracker. Running indicators in the Dock are controlled by macOS; these launchers are not reliable per-profile activity indicators. Incognito windows are excluded. The scan can visibly switch windows or Spaces and briefly restore minimized windows before minimizing them again. Avoid interacting with Chrome during the scan. The chooser is a native dialog, not a Windows taskbar thumbnail preview.
+It also learns the currently active Chrome window's profile from its checked Profiles menu item. If no window is known for the requested profile, Chrome's profile menu opens or selects that profile once. It never sweeps through other windows.
+
+**Discovery limitation:** Previously unseen windows must be brought forward by the user and followed by a profile-shortcut click before they can be remembered. After restarting Chrome, membership needs to be learned again. This AppleScript version does not provide automatic background discovery of every profile's windows or hover-triggered thumbnails.
+
+The cache is `~/Library/Application Support/ProfileDock/window-membership.txt`. It stores process ID, menu names, window IDs and profile membership, not URLs or window titles. Closed windows are removed on the next click. Incognito windows are excluded.
 
 ## Customize or rebuild
 

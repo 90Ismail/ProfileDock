@@ -84,12 +84,18 @@ def main():
     output.mkdir(parents=True)
     helper = output / "ProfileDock Helper.app"
     compile_app(ROOT / "switcher.applescript", helper)
+    subprocess.run([
+        "/usr/bin/xcrun", "swiftc", str(ROOT / "WindowMenu.swift"),
+        "-o", str(helper / "Contents/Resources/ProfileDockMenu"),
+    ], check=True)
+    subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(helper)], check=True)
     for profile in profiles:
         app = output / f"Chrome {profile['label']}.app"
         compile_app(ROOT / "launcher.applescript", app)
         resources = app / "Contents/Resources"
         (resources / "profile.txt").write_text(profile["chrome_name"], encoding="utf-8")
         icon(profile, resources / "applet.icns")
+        subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(app)], check=True)
     print(f"Created {len(profiles)} launchers in {output}")
     print("Keep all apps together. Drag individual Chrome launchers into the Dock.")
 
