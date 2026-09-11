@@ -4,9 +4,14 @@ on open inputFiles
     repeat with inputFile in inputFiles
         try
             set profileName to read inputFile as «class utf8»
+            if profileName is "" then error "The shortcut profile label is empty."
+            set profileName to paragraph 1 of profileName
             my switchProfile(profileName, 0, {})
         on error errorMessage number errorNumber
-            if errorNumber is not -128 then display dialog errorMessage & return & return & "For assistive-access errors, enable ProfileDock Helper in System Settings → Privacy & Security → Accessibility. Allow Automation access to Chrome and System Events." buttons {"OK"} default button "OK" with title "ProfileDock"
+            if errorNumber is not -128 then
+                if errorNumber is -25211 or errorNumber is -1743 or errorNumber is 1002 then set errorMessage to errorMessage & return & return & "Enable the helper in System Settings → Privacy & Security → Accessibility and allow its Automation access to Chrome and System Events."
+                display dialog errorMessage buttons {"OK"} default button "OK" with title "ProfileDock"
+            end if
         end try
     end repeat
 end open
