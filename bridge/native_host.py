@@ -84,6 +84,7 @@ def main():
     buffer = b""
     state_path = None
     commands = None
+    active_path = None
     # A profile with no window open (and that Chrome wasn't launched
     # targeting) typically has no active background context at all, so no
     # native_host.py instance ever receives "hello" for it — nobody would be
@@ -130,12 +131,27 @@ def main():
                         state_path = ROOT / "state" / (key + ".json")
                         commands = ROOT / "commands" / key
                         commands.mkdir(parents=True, exist_ok=True, mode=0o700)
+                        # Chrome's MV3 service worker can restart and open a
+                        # fresh native-messaging connection without reliably
+                        # closing the old one's stdin, leaving it running
+                        # forever. Claiming this marker lets every older
+                        # instance for the same profile notice on its next
+                        # tick that a newer connection has taken over, so it
+                        # can exit instead of piling up and racing the new
+                        # one for command files.
+                        active_path = ROOT / "active" / (key + ".json")
+                        atomic(active_path, {"session": SESSION, "pid": os.getpid(), "updated": time.time()})
                         send({"type": "ready"})
                     elif message.get("type") == "snapshot" and profile and message.get("profile") == profile:
                         windows = clean_windows(message.get("windows"))
                         last_write = 0
             if profile:
                 now = time.time()
+                try:
+                    if json.loads(active_path.read_text()).get("session") != SESSION:
+                        break  # superseded by a newer connection for this profile
+                except (OSError, ValueError):
+                    pass
                 if now - last_write > 0.2:
                     atomic(state_path, {"session": SESSION, "connected": True, "updated": now, "windows": windows})
                     last_write = now
