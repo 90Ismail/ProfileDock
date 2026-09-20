@@ -160,7 +160,19 @@ def main():
                 try:
                     live = json.loads(heartbeat.read_text())
                     os.kill(int(live["pid"]), 0)
-                    running = now - live["updated"] < 5
+                    # The pid check above already proves the process is
+                    # alive. A stale heartbeat on top of that just means its
+                    # 1s timer got delayed (e.g. App Nap while backgrounded
+                    # with no visible window) — it does NOT mean the process
+                    # died. Relaunching it in that case sends a macOS Reopen
+                    # event to the still-alive process, which unconditionally
+                    # raises Chrome (NativeLauncher's applicationShouldHandleReopen
+                    # -> choose() -> activateChrome()), stealing focus from
+                    # whatever app the user is actually using. A hung-but-alive
+                    # process wouldn't be fixed by a reopen event either, so
+                    # there's no upside to the staleness check — only false
+                    # positives.
+                    running = True
                 except (OSError, ValueError, KeyError):
                     pass
                 if windows and not running and now - last_launch > 1.5:

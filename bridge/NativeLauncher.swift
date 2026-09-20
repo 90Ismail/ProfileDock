@@ -29,6 +29,12 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTable
     var key = "", label = "", directory = ""
     var timer: Timer?
     var grace = Date().addingTimeInterval(15)
+    // Without this, App Nap can throttle the 1s heartbeat timer below since
+    // this process typically has no visible window and isn't foreground —
+    // a delayed heartbeat previously made native_host.py think this process
+    // had died and try to "relaunch" it, which instead delivered a Reopen
+    // event to this still-alive process and force-activated Chrome.
+    var activity: NSObjectProtocol?
 
     // Picker panel state (shown in-process — no child process, no
     // cross-process activation race, no IPC round trip to lose).
@@ -46,6 +52,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTable
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled], reason: "Keep heartbeat timer accurate")
         let info = Bundle.main.infoDictionary!
         key = info["ProfileDockKey"] as? String ?? ""
         label = info["ProfileDockLabel"] as? String ?? key
