@@ -4,6 +4,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import plistlib
 import shutil
 import subprocess
@@ -99,6 +100,41 @@ def status():
     return ready
 
 
+def install_agent():
+    """The Option+Tab window switcher and green-button maximizer, started at login."""
+    app = ROOT / 'ProfileDock Agent.app'
+    binary = app / 'Contents/MacOS/ProfileDockAgent'
+    built = ROOT / 'ProfileDockAgent.new'
+    run('xcrun', 'swiftc', '-O', SOURCE / 'bridge/Agent.swift', '-o', built)
+    # Only replace (and re-sign) the app when the code actually changed.
+    if binary.exists() and binary.read_bytes() == built.read_bytes():
+        built.unlink()
+    else:
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        built.replace(binary)
+        info = {'CFBundleIdentifier': 'local.profiledock.agent', 'CFBundleName': 'ProfileDock Agent',
+                'CFBundleExecutable': 'ProfileDockAgent', 'CFBundlePackageType': 'APPL', 'CFBundleVersion': '1',
+                'LSUIElement': True}
+        (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
+        # An ad-hoc signature's default requirement is its exact hash, so
+        # macOS would silently drop the Accessibility grant on every rebuild.
+        # Requiring only the bundle identifier keeps the grant.
+        run('codesign', '--force', '--sign', '-', '-r=designated => identifier "local.profiledock.agent"', app)
+    label = 'local.profiledock.agent'
+    plist = Path.home() / 'Library/LaunchAgents' / (label + '.plist')
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    plist.write_bytes(plistlib.dumps({'Label': label, 'Program': str(binary), 'RunAtLoad': True, 'KeepAlive': True}))
+    domain = f'gui/{os.getuid()}'
+    subprocess.run(['launchctl', 'bootout', domain + '/' + label], capture_output=True)
+    # bootout returns before the old agent has fully stopped; bootstrapping
+    # too soon fails with "Input/output error".
+    for _ in range(50):
+        if subprocess.run(['launchctl', 'print', domain + '/' + label], capture_output=True).returncode:
+            break
+        time.sleep(0.1)
+    run('launchctl', 'bootstrap', domain, plist)
+
+
 def install(config):
     if sys.platform != 'darwin':
         raise SystemExit('ProfileDock requires macOS.')
@@ -167,6 +203,7 @@ def install(config):
         (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
         run('codesign', '--force', '--sign', '-', app)
         profile['app'] = str(app)
+    install_agent()
     (ROOT / 'profiles.json').write_text(json.dumps(profiles, indent=2))
     (ROOT / 'profiles.json').chmod(0o600)
     import shlex

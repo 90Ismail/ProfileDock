@@ -1,6 +1,6 @@
 import AppKit
 
-struct Window: Decodable { let id: Int; let title: String; let tabCount: Int }
+struct Window: Decodable { let id: Int; let title: String; let tabCount: Int; let focused: Bool?; let lastFocused: Double? }
 struct State: Decodable { let session: String; let connected: Bool; let updated: Double; let windows: [Window] }
 
 final class PickerPanel: NSPanel {
@@ -35,6 +35,10 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTable
     // had died and try to "relaunch" it, which instead delivered a Reopen
     // event to this still-alive process and force-activated Chrome.
     var activity: NSObjectProtocol?
+    // The app that was frontmost before this launcher. By the time a Dock
+    // click reaches choose(), the Dock has already made *this* process
+    // frontmost, so it can't ask "is Chrome in front?" directly.
+    var previousFrontApp = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
 
     // Picker panel state (shown in-process — no child process, no
     // cross-process activation race, no IPC round trip to lose).
@@ -43,12 +47,23 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTable
     var pickerWindows: [Window] = []
     var pickerState: State?
     var keyMonitor: Any?
+    // When choose() last ran, so a Cmd+Tab to this launcher (activation with
+    // no Dock click) can be told apart from a Dock click (activation + reopen).
+    var lastChoose = Date.distantPast
+    var resultTimer: Timer?
+    var pickerOpened = Date.distantPast
 
-    func state() -> State? {
-        guard let data = try? Data(contentsOf: root.appendingPathComponent("state/\(key).json")),
+    func state(_ profile: String? = nil) -> State? {
+        guard let data = try? Data(contentsOf: root.appendingPathComponent("state/\(profile ?? key).json")),
               let s = try? JSONDecoder().decode(State.self, from: data), s.connected,
               Date().timeIntervalSince1970 - s.updated < 5 else { return nil }
         return s
+    }
+
+    /// When a window was last in front. A focused window counts as "now";
+    /// the bridge also stamps the moment a window loses focus.
+    func recency(_ w: Window) -> Double {
+        (w.focused ?? false) ? Date().timeIntervalSince1970 : (w.lastFocused ?? 0)
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
@@ -57,6 +72,18 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTable
         key = info["ProfileDockKey"] as? String ?? ""
         label = info["ProfileDockLabel"] as? String ?? key
         directory = info["ProfileDockDirectory"] as? String ?? "Default"
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            if let id = app?.bundleIdentifier, app?.processIdentifier != ProcessInfo.processInfo.processIdentifier { self.previousFrontApp = id }
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            // Reached with Cmd+Tab rather than a Dock click: there's no
+            // reopen event, so without this the user lands on an app with
+            // no windows and nothing happens.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                if NSApp.isActive && self.panel == nil && Date().timeIntervalSince(self.lastChoose) > 0.6 { self.choose() }
+            }
+        }
         tick()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in self.tick() }
         if !CommandLine.arguments.contains("--indicator-only") { choose() }
@@ -76,9 +103,11 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTable
     }
 
     func choose() {
+        lastChoose = Date()
         if let panel {
             NSApp.activate()
             panel.makeKeyAndOrderFront(nil)
+            panel.orderFrontRegardless()
             return
         }
         guard let s = state(), !s.windows.isEmpty else {
@@ -122,40 +151,74 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTable
             }
             return
         }
-        if s.windows.count == 1 { focus(s.windows[0], s); return }
-        showPicker(s)
+        // One click goes straight to this profile's most recently used
+        // window. Only when that profile is already the one in front does a
+        // click open the picker to reach its other windows.
+        let windows = s.windows.sorted { recency($0) > recency($1) }
+        // Always the same rule, so a click is predictable: one window goes
+        // straight there; two or more always open the picker.
+        if windows.count == 1 { focus(windows[0], s); return }
+        // The Agent's hover list for this profile is already showing above
+        // the icon; that list is where the user chooses.
+        if hoverListShowing() { return }
+        showPicker(s, windows)
+    }
+
+    func hoverListShowing() -> Bool {
+        guard let data = try? Data(contentsOf: root.appendingPathComponent("hover-picker.json")),
+              let info = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              info["key"] as? String == key, let updated = info["updated"] as? Double else { return false }
+        return Date().timeIntervalSince1970 - updated < 1.2
     }
 
     func activateChrome() {
-        // NSRunningApplication.activate() is the fast path; osascript's
-        // "activate" verb is a proven fallback that reliably raises Chrome
-        // even from a helper process with no foreground presence of its own.
-        if let chrome = NSRunningApplication.runningApplications(withBundleIdentifier: "com.google.Chrome").first {
-            chrome.activate(options: [])
+        guard let chrome = NSRunningApplication.runningApplications(withBundleIdentifier: "com.google.Chrome").first else { return }
+        // Without .allWindows only Chrome's key window comes forward — the
+        // one the extension just focused — not every other profile's window.
+        chrome.activate(options: [])
+        // osascript's "activate" is a slower fallback for the rare case the
+        // direct call is refused.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            guard !chrome.isActive else { return }
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            p.arguments = ["-e", "tell application \"Google Chrome\" to activate"]
+            try? p.run()
         }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        p.arguments = ["-e", "tell application \"Google Chrome\" to activate"]
-        try? p.run()
     }
 
     func focus(_ window: Window, _ state: State) {
+        let request = UUID().uuidString
         let folder = root.appendingPathComponent("commands/\(key)")
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         if let data = try? JSONSerialization.data(withJSONObject: ["type": "focus", "session": state.session, "windowId": window.id]) {
-            try? data.write(to: folder.appendingPathComponent(UUID().uuidString + ".json"), options: .atomic)
+            try? data.write(to: folder.appendingPathComponent(request + ".json"), options: .atomic)
         }
-        // chrome.windows.update({focused:true}) only reorders Chrome's own
-        // internal window stack; it does not raise Chrome above other
-        // applications at the OS level. Do that explicitly, after a short
-        // delay so the extension has already processed the focus command.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.activateChrome() }
+        // macOS only lets an app come forward if the frontmost app (this
+        // launcher, after the Dock click) hands over. Yielding lets Chrome's
+        // own activation from chrome.windows.update succeed, bringing exactly
+        // the requested window instead of whichever Chrome window was last
+        // in front (often another profile's).
+        if #available(macOS 14.0, *) { NSApp.yieldActivation(toApplicationWithBundleIdentifier: "com.google.Chrome") }
+        // Raise Chrome once the extension confirms the window is focused,
+        // not after a fixed delay: activating too early briefly shows (and
+        // badges the Dock with) whichever window Chrome had in front.
+        let result = root.appendingPathComponent("results/\(request).json")
+        let deadline = Date().addingTimeInterval(1.0)
+        resultTimer?.invalidate()
+        resultTimer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { timer in
+            let done = FileManager.default.fileExists(atPath: result.path)
+            guard done || Date() > deadline else { return }
+            timer.invalidate()
+            try? FileManager.default.removeItem(at: result)
+            self.activateChrome()
+        }
     }
 
     // MARK: - Picker panel (in-process, no subprocess)
 
-    func showPicker(_ s: State) {
-        pickerWindows = s.windows
+    func showPicker(_ s: State, _ windows: [Window]) {
+        pickerWindows = windows
         pickerState = s
 
         let width: CGFloat = 390
@@ -226,7 +289,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTable
         background.addSubview(scrollView)
         background.addSubview(hairline(x: 0, y: footerHeight, width: width))
 
-        let footer = NSTextField(labelWithString: "1–9 or ↑↓ + ⏎ to switch · Esc to cancel")
+        let footer = NSTextField(labelWithString: "Click a window, or 1–9 · ↑↓ + ⏎ · Esc to cancel")
         footer.font = .systemFont(ofSize: 10.5)
         footer.textColor = .tertiaryLabelColor
         footer.alignment = .center
@@ -237,8 +300,11 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTable
         installKeyMonitor()
         NSApp.activate()
         panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()  // visible even if activation lags
         panel.makeFirstResponder(tableView)
+        // Rows are most recently used first; Return reopens the last one.
         tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        pickerOpened = Date()
     }
 
     private func hairline(x: CGFloat, y: CGFloat, width: CGFloat) -> NSBox {
@@ -258,7 +324,15 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTable
         panel.setFrameOrigin(origin)
     }
 
+    var clickMonitor: Any?
+
     private func installKeyMonitor() {
+        // A click anywhere outside (another app, the desktop, the Dock)
+        // closes the picker, so it can never get stuck open.
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            guard let self, Date().timeIntervalSince(self.pickerOpened) > 0.4 else { return }
+            self.closePicker(choiceIndex: 0)
+        }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             switch event.keyCode {
@@ -267,6 +341,9 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTable
                 return nil
             case 53: // Escape
                 self.closePicker(choiceIndex: 0)
+                // Hand focus back to the window the user was on, rather than
+                // leaving this windowless launcher as the active app.
+                self.activateChrome()
                 return nil
             default:
                 if let chars = event.charactersIgnoringModifiers, let n = Int(chars),
@@ -288,6 +365,8 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTable
         guard let panel else { return }
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+        clickMonitor = nil
         let windows = pickerWindows
         let s = pickerState
         self.panel = nil
@@ -298,7 +377,12 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTable
         }
     }
 
-    func windowDidResignKey(_ notification: Notification) {
+    // Closing on the panel losing key focus made the picker sometimes vanish
+    // the instant it appeared (activation after a Dock click can briefly
+    // bounce key focus). Close only when the user actually leaves for
+    // another app, and never in the first moment after opening.
+    func applicationDidResignActive(_ notification: Notification) {
+        guard panel != nil, Date().timeIntervalSince(pickerOpened) > 0.4 else { return }
         closePicker(choiceIndex: 0)
     }
 
@@ -329,7 +413,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTable
         title.toolTip = choice.title
         cell.addSubview(title)
 
-        let subtitle = NSTextField(labelWithString: "\(choice.tabCount) tab\(choice.tabCount == 1 ? "" : "s")")
+        let subtitle = NSTextField(labelWithString: "\(choice.tabCount) tab\(choice.tabCount == 1 ? "" : "s")" + (row == 0 ? " · last used" : ""))
         subtitle.font = .systemFont(ofSize: 11)
         subtitle.textColor = .secondaryLabelColor
         subtitle.frame = NSRect(x: 62, y: rowHeight / 2 - 16, width: max(titleWidth, 40), height: 14)

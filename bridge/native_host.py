@@ -62,16 +62,33 @@ def open_profile(label):
     subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True)
 
 
-def clean_windows(windows):
+def clean_windows(windows, memory):
+    """Validate a snapshot. `memory` persists between snapshots and records,
+    per window, the last moment it was seen focused — including the moment
+    it *lost* focus. A Dock click always blurs Chrome before the launcher
+    reads state, so "lost focus a second ago" is how the launcher can still
+    tell this profile was the one in front."""
     if not isinstance(windows, list) or len(windows) > 1000:
         raise ValueError("Invalid window list")
+    times = memory.setdefault("times", {})
+    was_focused = memory.setdefault("focused", set())
     result = []
+    now = time.time()
+    focused_now = set()
     for w in windows:
         if not isinstance(w, dict) or type(w.get("id")) is not int:
             raise ValueError("Invalid window ID")
+        focused = bool(w.get("focused", False))
+        if focused:
+            focused_now.add(w["id"])
+        if focused or w["id"] in was_focused:
+            times[w["id"]] = now
+        times.setdefault(w["id"], 0)
         result.append({"id": w["id"], "title": str(w.get("title", "Chrome window"))[:1000],
                        "tabCount": max(0, int(w.get("tabCount", 0))),
-                       "focused": bool(w.get("focused", False))})
+                       "focused": focused, "lastFocused": times[w["id"]]})
+    was_focused.clear()
+    was_focused.update(focused_now)
     return result
 
 
@@ -79,6 +96,7 @@ def main():
     config = json.loads((ROOT / "profiles.json").read_text())
     profile = None
     windows = []
+    last_focused = {}
     last_write = 0
     last_launch = 0
     buffer = b""
@@ -142,8 +160,19 @@ def main():
                         active_path = ROOT / "active" / (key + ".json")
                         atomic(active_path, {"session": SESSION, "pid": os.getpid(), "updated": time.time()})
                         send({"type": "ready"})
+                    elif message.get("type") == "result" and profile and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", str(message.get("requestId", ""))):
+                        # Lets the launcher raise Chrome only once the right
+                        # window is in front, instead of guessing with a delay.
+                        results = ROOT / "results"
+                        atomic(results / (message["requestId"] + ".json"), {"ok": bool(message.get("ok"))})
+                        for old in results.glob("*.json"):  # ones a launcher stopped waiting for
+                            try:
+                                if time.time() - old.stat().st_mtime > 30:
+                                    old.unlink()
+                            except OSError:
+                                pass
                     elif message.get("type") == "snapshot" and profile and message.get("profile") == profile:
-                        windows = clean_windows(message.get("windows"))
+                        windows = clean_windows(message.get("windows"), last_focused)
                         last_write = 0
             if profile:
                 now = time.time()
@@ -175,7 +204,14 @@ def main():
                     running = True
                 except (OSError, ValueError, KeyError):
                     pass
-                if windows and not running and now - last_launch > 1.5:
+                # 8s, not 1.5s: an ad-hoc-signed local build can take several
+                # seconds to cold-launch (Gatekeeper verification, framework
+                # loading, more under system load) before its first heartbeat
+                # write lands. Retrying sooner than that risks a second `open
+                # -a` landing on the still-launching-but-now-alive process,
+                # which macOS delivers as a Reopen event instead of a second
+                # launch — see the comment above on why that steals focus.
+                if windows and not running and now - last_launch > 8:
                     subprocess.run(["/usr/bin/open", "-g", "-j", "-a", config[profile]["app"], "--args", "--indicator-only"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     last_launch = now
                 for file in commands.glob("*.json"):

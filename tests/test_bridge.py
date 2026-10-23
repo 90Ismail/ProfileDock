@@ -17,11 +17,29 @@ class BridgeTests(unittest.TestCase):
     def test_rejects_invalid_windows(self):
         for value in ({}, [{'id': '1'}], [{'id': True}]):
             with self.assertRaises(ValueError):
-                host.clean_windows(value)
+                host.clean_windows(value, {})
 
     def test_only_window_metadata_leaves_browser(self):
-        result = host.clean_windows([{'id': 3, 'title': 'Example', 'tabCount': 2, 'url': 'private', 'tabs': ['private']}])
-        self.assertEqual(result, [{'id': 3, 'title': 'Example', 'tabCount': 2, 'focused': False}])
+        result = host.clean_windows([{'id': 3, 'title': 'Example', 'tabCount': 2, 'url': 'private', 'tabs': ['private']}], {})
+        self.assertEqual(result, [{'id': 3, 'title': 'Example', 'tabCount': 2, 'focused': False, 'lastFocused': 0}])
+
+    def test_remembers_last_focused_window(self):
+        seen = {}
+        host.clean_windows([{'id': 1, 'focused': True}, {'id': 2}], seen)
+        result = host.clean_windows([{'id': 1}, {'id': 2}], seen)
+        self.assertGreater(result[0]['lastFocused'], result[1]['lastFocused'])
+
+    def test_losing_focus_refreshes_last_focused(self):
+        # A Dock click blurs Chrome before the launcher reads state; the blur
+        # moment must count as "just focused" so the picker still opens.
+        seen = {}
+        host.clean_windows([{'id': 1, 'focused': True}], seen)
+        seen['times'][1] = 5
+        result = host.clean_windows([{'id': 1}], seen)
+        self.assertGreater(result[0]['lastFocused'], time.time() - 2)
+        seen['times'][1] = 5
+        result = host.clean_windows([{'id': 1}], seen)
+        self.assertEqual(result[0]['lastFocused'], 5)
 
     def test_connection_commands_and_disconnect(self):
         import struct
@@ -47,7 +65,14 @@ class BridgeTests(unittest.TestCase):
                 command = root / 'commands/work/request.json'
                 command.write_text(json.dumps({'session':state['session'],'type':'focus','windowId':123}))
                 size = struct.unpack('=I', proc.stdout.read(4))[0]
-                self.assertEqual(json.loads(proc.stdout.read(size))['windowId'], 123)
+                focus = json.loads(proc.stdout.read(size))
+                self.assertEqual(focus['windowId'], 123)
+                send({'type': 'result', 'requestId': focus['requestId'], 'ok': True})
+                result = root / 'results' / (focus['requestId'] + '.json')
+                for _ in range(50):
+                    if result.exists(): break
+                    time.sleep(.05)
+                self.assertTrue(json.loads(result.read_text())['ok'])
                 proc.stdin.close(); proc.wait(timeout=5)
                 self.assertFalse(json.loads(p.read_text())['connected'])
                 self.assertEqual(json.loads(p.read_text())['windows'], [])
