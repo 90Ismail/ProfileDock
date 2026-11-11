@@ -205,16 +205,22 @@ final class Delegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func focus(_ window: Window, _ state: State) {
+    func focus(_ window: Window, _ state: State, retried: Bool = false) {
         // Lets Chrome's own activation (from chrome.windows.update) succeed,
         // bringing exactly the requested window.
         yieldToChrome()
         send("focus", window, state) { ok in
-            if ok == true {
-                self.activateChrome()
+            if ok == true { self.activateChrome(); return }
+            // Refused or slow: the bridge may have reconnected (a new
+            // session) since the state was read. Try once more with the
+            // current state while the window still exists.
+            if !retried, let fresh = self.state(), fresh.windows.contains(where: { $0.id == window.id }) {
+                self.focus(window, fresh, retried: true)
+            } else if ok == nil {
+                self.activateChrome()  // it may have worked; don't jump to another window
             } else {
-                // The window just closed, or the bridge is stuck: still land
-                // on this profile rather than whichever window was in front.
+                // The window just closed: still land on this profile rather
+                // than whichever window was in front.
                 self.selectProfile()
             }
         }

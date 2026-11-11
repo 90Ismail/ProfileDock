@@ -472,6 +472,7 @@ final class Agent: NSObject, NSApplicationDelegate {
             appLabel.frame = NSRect(x: 6, y: 36, width: view.frame.width - 12, height: 16)
             view.addSubview(appLabel)
             let title = NSTextField(wrappingLabelWithString: item.app.bundleIdentifier == "com.google.Chrome" ? pageTitle(item.title) : item.title)
+            title.isSelectable = false
             title.font = .systemFont(ofSize: 11)
             title.alignment = .center
             title.maximumNumberOfLines = 2
@@ -1153,6 +1154,13 @@ class HoverControl: NSView {
     private(set) var hovering = false
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    /// The whole control takes the click, labels and icons included; only
+    /// a control inside it (the × button) keeps its own. Otherwise a click
+    /// on a title can start a text selection and never reach the row.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        return hit is HoverControl ? hit : self
+    }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let area { removeTrackingArea(area) }
@@ -1230,6 +1238,7 @@ struct LiveState: Decodable {
 
 /// What the open list is showing, to tell when it needs redrawing.
 struct HoverShown: Equatable {
+    let session: String
     let windows: [Window]
     let chromeActive: Bool
     let canClose: Bool
@@ -1377,7 +1386,7 @@ extension Agent {
     }
 
     func shown(_ live: LiveState) -> HoverShown {
-        HoverShown(windows: live.windows.filter { !hoverExcluded.contains($0.id) },
+        HoverShown(session: live.session, windows: live.windows.filter { !hoverExcluded.contains($0.id) },
                    chromeActive: runningChrome()?.isActive == true, canClose: live.canClose)
     }
 
@@ -1444,12 +1453,14 @@ extension Agent {
         guard let panel = hoverPanel, let key = hoverKey,
               let app = installedProfiles().first(where: { $0.key == key })?.app,
               let tile = dockItemFrame(forApp: app), tile != hoverListTile else { return }
+        let previous = hoverListTile
         hoverListTile = tile
         let origin = hoverOrigin(for: panel.frame.size)
         let dock = dockFrame.isNull ? tile : dockFrame
         let away = dock.width >= dock.height ? origin.y > panel.frame.minY + 1
             : (cocoaRect(dock).midX < panel.frame.midX ? origin.x > panel.frame.minX + 1 : origin.x < panel.frame.minX - 1)
-        guard away else { return }
+        // A shrinking icon must not pull the list back down later.
+        guard away else { hoverListTile = previous; return }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
             panel.animator().setFrame(NSRect(origin: origin, size: panel.frame.size), display: true)
@@ -1457,10 +1468,18 @@ extension Agent {
     }
 
     func pollHoverList() {
-        guard let key = hoverKey, hoverPanel != nil else { return }
+        guard let key = hoverKey, let panel = hoverPanel else { return }
         guard NSEvent.pressedMouseButtons == 0 else { return }  // never swap rows mid-click
-        guard let live = liveWindows(key) else { hideHoverList(animated: true); return }
-        if shown(live) != hoverShown { refreshHoverList() }
+        guard let live = liveWindows(key) else {
+            // Only once the pointer is out of the list: a bridge that is
+            // reconnecting is back within a second or two.
+            if !panel.frame.contains(NSEvent.mouseLocation) { hideHoverList(animated: true) }
+            return
+        }
+        // While the pointer is in the list, rows stay exactly where they are
+        // (a title changing in the background would shift the row about to
+        // be clicked); the list catches up once the pointer leaves.
+        if shown(live) != hoverShown && !panel.frame.contains(NSEvent.mouseLocation) { refreshHoverList() }
         clearMagnifiedIcon()
     }
 
@@ -1469,7 +1488,7 @@ extension Agent {
         guard let panel = hoverPanel, let key = hoverKey else { return }
         guard let live = liveWindows(key), let content = hoverContent(key, live) else { hideHoverList(animated: true); return }
         let scrolled = scrollView(in: panel.contentView)?.contentView.bounds.origin
-        install(content, in: panel)
+        install(content, in: panel, keepPlace: true)
         if let scrolled, let scroll = scrollView(in: content) {
             scroll.contentView.scroll(to: scrolled)
             scroll.reflectScrolledClipView(scroll.contentView)
@@ -1484,8 +1503,27 @@ extension Agent {
         return nil
     }
 
-    func install(_ content: NSView, in panel: NSPanel) {
-        panel.setFrame(NSRect(origin: hoverOrigin(for: content.frame.size), size: content.frame.size), display: false)
+    /// `keepPlace`: a list already on screen keeps its edge by the Dock
+    /// (only growing or shrinking away from it), instead of being placed
+    /// afresh against an icon that has since shrunk back.
+    func install(_ content: NSView, in panel: NSPanel, keepPlace: Bool = false) {
+        var origin = hoverOrigin(for: content.frame.size)
+        if keepPlace {
+            let dock = dockFrame.isNull ? hoverListTile : dockFrame
+            let old = panel.frame
+            if dock.width >= dock.height {
+                origin = NSPoint(x: old.minX, y: old.minY)
+            } else {
+                origin = NSPoint(x: cocoaRect(dock).midX < old.midX ? old.minX : old.maxX - content.frame.width,
+                                 y: old.maxY - content.frame.height)
+            }
+            if let screen = panel.screen ?? NSScreen.main {
+                let bounds = screen.frame.insetBy(dx: 8, dy: 8)
+                origin.x = min(max(origin.x, bounds.minX), bounds.maxX - content.frame.width)
+                origin.y = min(max(origin.y, bounds.minY), bounds.maxY - content.frame.height)
+            }
+        }
+        panel.setFrame(NSRect(origin: origin, size: content.frame.size), display: false)
         panel.contentView = content
         panel.invalidateShadow()
         // Highlight whatever row is already under the pointer.
@@ -1642,6 +1680,7 @@ extension Agent {
         let textX: CGFloat = 36, textWidth = width - textX - (canClose ? 32 : 10)
         let text = window.title.isEmpty ? "New Tab" : window.title
         let title = NSTextField(wrappingLabelWithString: text)
+        title.isSelectable = false  // wrapping labels are selectable by default
         title.font = .systemFont(ofSize: 13, weight: tag == .current ? .medium : .regular)
         title.textColor = window.minimized ? .secondaryLabelColor : .labelColor
         title.maximumNumberOfLines = 2
@@ -1700,7 +1739,7 @@ extension Agent {
         row.setAccessibilityLabel(text + (window.minimized ? ", minimized" : ""))
         row.onClick = { [weak self] in
             self?.hideHoverList()
-            self?.focusWindow(key: key, session: session, windowId: window.id)
+            self?.focusWindow(key: key, windowId: window.id, title: text)
         }
 
         if canClose {
@@ -1718,7 +1757,8 @@ extension Agent {
             let closeWindow = { [weak self] in
                 guard let self else { return }
                 self.hoverExcluded.insert(window.id)
-                self.sendCommand("close", key: key, session: session, windowId: window.id) { [weak self] ok in
+                let current = self.liveWindows(key)?.session ?? session  // the bridge may have reconnected
+                self.sendCommand("close", key: key, session: current, windowId: window.id) { [weak self] ok in
                     // Chrome refused (or the window was already gone): show
                     // whatever is really there.
                     guard let self, ok != true else { return }
@@ -1800,11 +1840,69 @@ extension Agent {
         }
     }
 
-    func focusWindow(key: String, session: String, windowId: Int) {
-        sendCommand("focus", key: key, session: session, windowId: windowId) { ok in
-            // Raise Chrome once the right window is in front; if that failed,
-            // still land on this profile, not whichever window was in front.
-            if ok == true { self.bringChromeForward() } else { self.selectProfile(key) }
+    /// Switch to one window from the list. Always uses the bridge's current
+    /// connection (it changes whenever Chrome restarts the extension, which
+    /// a list opened earlier can't know), waits out a reconnect, retries a
+    /// refusal, and only falls back to the profile's last window when the
+    /// window itself is gone.
+    func focusWindow(key: String, windowId: Int, title: String, attempt: Int = 0) {
+        let retry = { (delay: Double) in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                self.focusWindow(key: key, windowId: windowId, title: title, attempt: attempt + 1)
+            }
+        }
+        if attempt == 0 { log("list click: \(key) window \(windowId)") }
+        guard let live = liveWindows(key) else {
+            if attempt < 8 { retry(0.25); return }
+            log("list click: \(key) bridge not connected; showing the profile instead")
+            selectProfile(key)
+            return
+        }
+        guard live.windows.contains(where: { $0.id == windowId }) else {
+            log("list click: that \(key) window is gone; showing the profile instead")
+            selectProfile(key)
+            return
+        }
+        sendCommand("focus", key: key, session: live.session, windowId: windowId) { ok in
+            if ok == true {
+                log("list click: \(key) window \(windowId) focused")
+                self.bringChromeWindowForward(title: title, key: key)
+            } else if attempt < 2 {
+                log("list click: \(key) focus \(ok == nil ? "timed out" : "refused"), retrying")
+                retry(0.15)
+            } else if ok == nil {
+                // Chrome may still have switched; don't jump to another window.
+                log("list click: \(key) focus timed out; bringing Chrome forward")
+                self.bringChromeWindowForward(title: title, key: key)
+            } else {
+                log("list click: \(key) focus refused; showing the profile instead")
+                self.selectProfile(key)
+            }
+        }
+    }
+
+    /// Bring Chrome forward with the window just focused on top: the Chrome
+    /// window with that page title in that profile (preferring Chrome's own
+    /// key window among look-alikes), raised by itself rather than the app's
+    /// whole stack.
+    func bringChromeWindowForward(title: String, key: String) {
+        guard let chrome = runningChrome() else { return }
+        let app = AXUIElementCreateApplication(chrome.processIdentifier)
+        AXUIElementSetMessagingTimeout(app, 0.3)
+        let windows: [AXUIElement] = attribute(app, kAXWindowsAttribute) ?? []
+        let label = installedProfiles().first { $0.key == key }?.label
+        let profiles = chromeProfiles()
+        let matches = windows.filter { window in
+            let full: String = attribute(window, kAXTitleAttribute) ?? ""
+            return full.hasPrefix(title + " - Google Chrome") && (label == nil || profile(forChromeTitle: full, in: profiles)?.label == label)
+        }
+        let focused: AXUIElement? = attribute(app, kAXFocusedWindowAttribute)
+        let target = matches.first { window in focused.map { CFEqual($0, window) } ?? false } ?? matches.first ?? focused
+        if let target {
+            AXUIElementPerformAction(target, kAXRaiseAction as CFString)
+            bringForward(chrome, window: windowID(target))
+        } else {
+            bringForward(chrome)
         }
     }
 }
