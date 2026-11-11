@@ -1,105 +1,126 @@
 # ProfileDock
 
-**A different Dock icon for every Chrome profile on macOS.**
+**A Dock icon for every Chrome profile on macOS, that knows each profile's windows.**
 
-Keep work, personal, and school browsing easy to recognize with colorful, labeled app icons. Click a launcher to select that profile through Chrome’s own **Profiles** menu. Chrome handles bringing its existing profile window forward or opening one when needed.
+Click a profile's icon to go straight to its windows. Hover it to see them listed. Work, school, and personal browsing each get their own recognizable icon, and none of them stop at Chrome's "Who's using Chrome?" picker.
 
-Built from a personal collection of AppleScript shortcuts, this public version uses configurable names and generated letter icons.
+Everything stays on your Mac: no accounts, analytics, or network calls. Window titles, tab counts, and site names travel from Chrome to the Dock through local files only, never URLs.
 
-## Features
+## How it works
 
-- Separate, recognizable Dock launchers with configurable labels, colors, and initials.
-- Uses Chrome’s built-in profile switching. When a profile has several windows, a compact native popup menu lists their titles and tab counts.
-- Matches profile names instead of fragile menu positions.
-- One shared helper for macOS Accessibility permission.
-- Launchers exit after handing off; they do not pretend to track whether a profile is running.
-- No account sign-in, passwords, Chrome data extraction, analytics, or network calls in the tool.
+`setup.py` installs four pieces:
+
+- **A launcher app per profile** (`Chrome Work.app`, …) for the Dock.
+- **A small Chrome extension per profile** that reports that profile's windows.
+- **A local bridge** (`native_host.py`) that Chrome starts for the extension. It passes window lists to the Dock and commands back to Chrome.
+- **The ProfileDock Agent**, a background helper started at login. It draws the hover list and handles the things launchers can't (see below). It needs Accessibility permission.
 
 ## Requirements
 
-- macOS with Google Chrome installed and its interface set to English.
-- Python 3.10+ and Pillow (installed below).
-- Xcode Command Line Tools for the native Swift menu (`xcode-select --install`).
-- Existing Chrome profiles with **unique display names** in Chrome’s Profiles menu.
-
-This is a macOS utility, not a Chrome extension. It does not create accounts or profiles.
+- macOS with Google Chrome, its interface set to English.
+- Python 3.10 or later. No packages are needed; Pillow is optional, for icons made from each profile's Google picture.
+- Xcode command line tools (`xcode-select --install`).
+- Chrome profiles with distinct names.
 
 ## Setup
 
 In a terminal in this repository:
 
 ```sh
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp profiles.example.json profiles.local.json
+python3 setup.py                     # asks for a short Dock label per Chrome profile
+python3 setup.py --config my.json    # or reuse a saved configuration
+python3 setup.py --status            # each profile's connection, and anything to fix
 ```
 
-Edit `profiles.local.json`. Set `chrome_name` to the **exact visible name in Chrome → Profiles**, not an email address or profile-directory name. Rename duplicate Chrome profiles first.
+A configuration maps a short key to a label and Chrome profile folder. It can also set a `color` as `[r, g, b]` and an `icon` path:
 
 ```json
-[
-  {"label": "Work", "chrome_name": "Work", "color": "#163B70", "initial": "W"},
-  {"label": "Personal", "chrome_name": "Personal", "color": "#21865A", "initial": "P"},
-  {"label": "School", "chrome_name": "School", "color": "#338CC7", "initial": "S"}
-]
+{
+  "work": {"label": "Work", "chromeDirectory": "Default"},
+  "school": {"label": "School", "chromeDirectory": "Profile 1"}
+}
 ```
 
-Build directly into your Applications folder:
+Then, once for each profile:
 
-```sh
-python build.py --output "$HOME/Applications/ProfileDock"
-open "$HOME/Applications/ProfileDock"
-```
+1. Load its extension: in that profile, open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and choose the folder `setup.py` printed.
+2. Drag its app from the printed `apps` folder into the Dock.
+3. When macOS asks, give **ProfileDock Agent** Accessibility permission (System Settings → Privacy & Security → Accessibility).
 
-Drag `Chrome Work.app`, `Chrome Personal.app`, and the other launchers into the Dock. Keep **ProfileDock Helper.app** in the same folder as the launchers; it does not need to be pinned.
+Running `setup.py` again updates everything in place, and running extensions reload themselves. The exception is extensions older than 0.2.0, which can't do that: click ↻ on ProfileDock in `chrome://extensions` once per profile. Restarting Chrome is not enough, because Chrome keeps running a folder-loaded extension's old background code until it's reloaded. `--status` tells you which profiles need this.
 
-## First launch and permissions
+A profile with no open windows shows as not connected. Chrome stops its extension until a window opens.
 
-Click a launcher. macOS may request permission for **ProfileDock Helper** to control Chrome or System Events. Allow these prompts to use profile switching.
+## Using it
 
-If you see “not allowed assistive access,” open **System Settings → Privacy & Security → Accessibility**, add `ProfileDock Helper.app` using **+**, and enable it. You may need to authenticate. Check **Privacy & Security → Automation** for the helper’s Chrome and System Events permissions as well.
+**Clicking a profile icon** always does something visible:
 
-The apps are locally compiled AppleScript apps, not signed or notarized distribution binaries. Build from source on your own Mac. Do not disable Gatekeeper or System Integrity Protection.
+- **The profile has no windows:** one opens.
+- **Another app or profile is in front:** that profile's most recently used window comes forward.
+- **That profile is already in front:** its next window comes forward, so repeated clicks visit them all.
 
-## How it works
+Minimized windows stay put while a visible window can be shown, as with any Dock icon. A double-click counts as one click.
 
-The helper remembers window/profile membership locally. On a click it reads titles and tab counts without raising windows. Multiple known windows appear in the picker; only selecting a row raises a window. One known window is focused directly. Cancel leaves Chrome windows unchanged.
+**Hovering an icon** lists the profile's windows with each one's favicon, site, and tab count, in the order clicks walk through them:
+- **Current** marks the window in front, and **Last used** marks the one a click would bring back.
+- Click a row to switch to that window. Close a window with **×** or a middle-click, or open another with **New Window**.
+- The list updates while it's open and closes with Esc.
 
-It also learns the currently active Chrome window's profile from its checked Profiles menu item. If no window is known for the requested profile, Chrome's profile menu opens or selects that profile once. It never sweeps through other windows.
+**Right-clicking an icon** shows the same windows as a Dock menu.
 
-**Discovery limitation:** Previously unseen windows must be brought forward by the user and followed by a profile-shortcut click before they can be remembered. After restarting Chrome, membership needs to be learned again. This AppleScript version does not provide automatic background discovery of every profile's windows or hover-triggered thumbnails.
+**Chrome's own Dock icon** never stops at the "Who's using Chrome?" picker. Clicked while Chrome has no windows open, it opens the profile you used last, as Chrome does with its picker turned off.
 
-The cache is `~/Library/Application Support/ProfileDock/window-membership.txt`. It stores process ID, menu names, window IDs and profile membership, not URLs or window titles. Closed windows are removed on the next click. Incognito windows are excluded.
-
-## Customize or rebuild
-
-Change the local JSON and choose a **new** output directory. The builder refuses to overwrite existing folders. After checking the new launchers, replace the old Dock shortcuts manually. Rebuilding the helper can require renewing its Accessibility permission.
-
-`label` controls the app/icon label (letters, numbers, spaces, hyphens, underscores; up to 30 characters). `initial` takes one or two characters. `color` accepts a Pillow color such as `#163B70`.
-
-The example icons are generic letter artwork generated locally. No personal photographs or account information are included. `profiles.local.json` and generated app bundles are ignored by Git.
+The Agent also:
+- adds an **Option+Tab** window switcher for all apps (hold Option and press Tab, or point and click; Esc cancels);
+- makes the **green button** fill the screen (Option-click it for full screen);
+- minimizes profile windows **into their own Dock icon** (yellow button or Cmd+M);
+- resumes a launcher if macOS ever leaves one frozen at launch, so clicks are never lost.
 
 ## Troubleshooting
 
-- **Profile not found:** Match spelling and capitalization in Chrome’s Profiles menu. Use distinct display names.
-- **No Profiles menu:** Chrome must use English; localized menu labels are not supported yet. Chrome UI updates may require changes to the AppleScript.
-- **Repeated permission error:** Remove the old helper entry in Accessibility and add the current helper from its final location.
-- **Icon looks stale:** Remove and re-add that launcher in the Dock.
-- **New window opens:** Chrome may have no reusable window for that profile. This tool delegates to Chrome; it cannot guarantee which window Chrome selects.
+- **A profile isn't connected:** run `python3 setup.py --status`. It says whether the extension is missing, out of date, or just has no windows open.
+- **Clicks open the profile through Chrome's Profiles menu:** that's the fallback when the bridge isn't connected yet. It still lands on the right profile.
+- **Opening Chrome from Spotlight or Launchpad shows the picker:** untick **Show on startup** at the bottom of the picker.
+- **Icon looks stale:** remove that launcher from the Dock and drag it in again.
+- **Logs:** `~/Library/Application Support/ProfileDock/agent.log` (Agent) and `bridge/host.log` (bridge errors).
+
+## Simple version without the extension (build.py)
+
+`build.py` builds an older, simpler variant. It's made of AppleScript launchers that pick the profile in Chrome's Profiles menu, plus a helper that learns windows as you use them. It needs Pillow (`pip install -r requirements.txt`) and its own configuration (`profiles.example.json`):
+
+```sh
+python build.py --config profiles.local.json --output "$HOME/Applications/ProfileDock"
+```
+
+It can't see a profile's windows until you've visited them, and it has no hover list. Use `setup.py` unless you can't install the extension.
 
 ## Development
 
 ```sh
-python -m unittest discover -s tests -v
-python build.py --config profiles.example.json --output build/demo
+python3 -m unittest discover -s tests -v
 ```
 
-Tests validate configuration handling. Building on macOS checks AppleScript compilation and icon generation. End-to-end window switching needs real Chrome profiles and interactive macOS permissions.
+The tests cover:
+- the bridge;
+- which window a Dock click picks (`bridge/WindowChoice.swift`, built with the Xcode tools);
+- the Chrome extension, run against a fake Chrome API (needs Node.js);
+- the `--status` messages and `build.py`'s configuration checks.
+
+Tests skip what the machine can't run. Window switching itself needs real Chrome profiles and macOS permissions, so test it by hand.
 
 ## Remove
 
-Remove the shortcuts from the Dock and delete only the generated ProfileDock folder. This does not delete Chrome profiles or browsing data. Remove the helper’s Accessibility permission if desired.
+1. Remove the icons from the Dock.
+2. Unload the Agent and delete its files:
+
+   ```sh
+   launchctl bootout gui/$(id -u)/local.profiledock.agent
+   rm ~/Library/LaunchAgents/local.profiledock.agent.plist
+   rm -r ~/Library/Application\ Support/ProfileDock
+   ```
+3. Remove the extension from each profile, and ProfileDock Agent from Accessibility.
+
+This doesn't touch Chrome profiles or browsing data.
 
 ## License
 

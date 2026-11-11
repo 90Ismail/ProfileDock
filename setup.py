@@ -86,18 +86,43 @@ def safe_python():
     raise SystemExit('Could not find a Python interpreter outside Desktop/Documents/Downloads for the background helper.')
 
 
+def describe(key, profile, chrome_running, now=None):
+    """One profile's line in --status, and whether it needs attention."""
+    now = now or time.time()
+    try:
+        state = json.loads((ROOT / 'state' / (key + '.json')).read_text())
+    except (OSError, ValueError):
+        return f"never connected. Load the extension in this profile: {ROOT / 'extensions' / key}", True
+    try:
+        installed = json.loads((ROOT / 'extensions' / key / 'manifest.json').read_text()).get('version')
+    except (OSError, ValueError):
+        installed = None
+    outdated = bool(installed and state.get('version') != installed)
+    if state.get('connected') and now - state.get('updated', 0) < 5:
+        count = len(state.get('windows', []))
+        line = f"connected, {count} window{'' if count == 1 else 's'}"
+    elif not chrome_running:
+        line = 'Chrome is closed'
+    else:
+        # Chrome stops a profile's extension once its last window closes.
+        line = 'no windows open (connects when one opens)'
+    if outdated:
+        line += f"; running extension {state.get('version') or 'before 0.2.0'}, installed {installed}: in this profile open chrome://extensions and click ↻ on ProfileDock once (a Chrome restart is not enough)"
+    return line, outdated
+
+
 def status():
     profiles = json.loads((ROOT / 'profiles.json').read_text())
-    ready = True
+    chrome_running = subprocess.run(['pgrep', '-x', 'Google Chrome'], capture_output=True).returncode == 0
+    width = max(len(p['label']) for p in profiles.values())
+    attention = False
     for key, profile in profiles.items():
-        try:
-            state = json.loads((ROOT / 'state' / (key + '.json')).read_text())
-            connected = state['connected'] and time.time() - state['updated'] < 5
-        except (OSError, ValueError, KeyError):
-            connected = False
-        print(f"{profile['label']}: " + (f"Connected — {len(state['windows'])} window(s)" if connected else 'Waiting for Chrome extension'))
-        ready &= connected
-    return ready
+        line, bad = describe(key, profile, chrome_running)
+        print(f"{profile['label']:<{width}}  {line}")
+        attention |= bad
+    agent = subprocess.run(['pgrep', '-f', 'ProfileDock Agent.app/Contents/MacOS/ProfileDockAgent'], capture_output=True).returncode == 0
+    print(f"\n{'Agent':<{width}}  " + ('running' if agent else 'not running: run setup again'))
+    return not attention and agent
 
 
 def install_agent():
@@ -105,7 +130,7 @@ def install_agent():
     app = ROOT / 'ProfileDock Agent.app'
     binary = app / 'Contents/MacOS/ProfileDockAgent'
     built = ROOT / 'ProfileDockAgent.new'
-    run('xcrun', 'swiftc', '-O', SOURCE / 'bridge/Agent.swift', '-o', built)
+    run('xcrun', 'swiftc', '-O', SOURCE / 'bridge/WindowChoice.swift', SOURCE / 'bridge/Agent.swift', '-o', built)
     # Only replace (and re-sign) the app when the code actually changed.
     if binary.exists() and binary.read_bytes() == built.read_bytes():
         built.unlink()
@@ -135,6 +160,14 @@ def install_agent():
     run('launchctl', 'bootstrap', domain, plist)
 
 
+def restart_helpers():
+    """Running launchers and bridge connections keep their old code until they
+    restart. Launchers come back on their own (the bridge relaunches them for
+    profiles with windows) and the extension reconnects within seconds."""
+    subprocess.run(['pkill', '-x', 'ProfileDock'], capture_output=True)
+    subprocess.run(['pkill', '-f', str(ROOT / 'native_host.py')], capture_output=True)
+
+
 def install(config):
     if sys.platform != 'darwin':
         raise SystemExit('ProfileDock requires macOS.')
@@ -155,11 +188,10 @@ def install(config):
             raise SystemExit('Profile keys must contain lowercase letters, digits, underscores or hyphens.')
         if not profile.get('label') or '/' in profile['label'] or ':' in profile['label']:
             raise SystemExit('Profile labels cannot be empty or contain / or :.')
-    # The window picker is built directly into NativeLauncher (shown as an
-    # in-process panel) rather than as a separate helper process: a second
-    # process has no shared foreground state with the launcher, so handing
-    # it focus was an unreliable cross-process race.
-    run('xcrun', 'swiftc', '-O', SOURCE / 'bridge/NativeLauncher.swift', '-o', ROOT / 'ProfileDockLauncher')
+    # One launcher binary, copied into every profile's app. The window list
+    # shown on hover is drawn by the Agent (it has Accessibility).
+    run('xcrun', 'swiftc', '-O', SOURCE / 'bridge/WindowChoice.swift', SOURCE / 'bridge/NativeLauncher.swift',
+        '-o', ROOT / 'ProfileDockLauncher')
     shutil.copy2(SOURCE / 'bridge/native_host.py', ROOT / 'native_host.py')
     # The public key gives all local profile variants a stable Chrome extension ID.
     public = ROOT / 'extension-public.der'
@@ -185,12 +217,18 @@ def install(config):
         executables = app / 'Contents/MacOS'
         resources.mkdir(parents=True, exist_ok=True)
         executables.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / 'ProfileDockLauncher', executables / 'ProfileDock')
+        # Swap the binary in with a rename: overwriting a running app's
+        # executable in place invalidates its code signature and crashes it.
+        staged = executables / 'ProfileDock.new'
+        shutil.copy2(ROOT / 'ProfileDockLauncher', staged)
+        staged.replace(executables / 'ProfileDock')
         generated = ROOT / 'generated-icons' / (key + '.icns')
         generated.parent.mkdir(parents=True, exist_ok=True)
         if profile.get('icon'):
             icon = Path(profile['icon'])
-        elif generate_icon(profile, index, generated):
+        elif generate_icon(profile, index, generated) or generated.exists():
+            # Without Pillow, keep the icon generated on an earlier run
+            # rather than replacing it with the plain Chrome icon.
             icon = generated
         else:
             icon = Path('/Applications/Google Chrome.app/Contents/Resources/app.icns')
@@ -214,6 +252,7 @@ def install(config):
     host.parent.mkdir(parents=True, exist_ok=True)
     host.write_text(json.dumps({'name': 'local.profiledock.bridge', 'description': 'ProfileDock window connection',
                                'path': str(wrapper), 'type': 'stdio', 'allowed_origins': ['chrome-extension://' + extension_id + '/']}))
+    restart_helpers()
     print('\nApps built. Existing Dock shortcuts have not been replaced.\n')
     for key, p in profiles.items():
         print(f"{p['label']}: open chrome://extensions in that profile, enable Developer mode, click Load unpacked, choose:\n  {ROOT / 'extensions' / key}\n")
