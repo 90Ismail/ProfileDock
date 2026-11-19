@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="330" viewBox="0 0 1200 330" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <filter id="card" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#1b2a4e" flood-opacity="0.14"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0L10 5 0 10z" fill="#8a93a6"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="330" rx="20" fill="#f4f6fb"/>
+
+  <!-- Step 1: terminal -->
+  <g filter="url(#card)"><rect x="30" y="30" width="360" height="270" rx="18" fill="#fff"/></g>
+  <text x="54" y="66" font-size="13" font-weight="700" fill="#5b4bb7" letter-spacing="1">STEP 1</text>
+  <text x="54" y="90" font-size="18" font-weight="700" fill="#1d1d1f">Run the installer</text>
+  <rect x="54" y="110" width="312" height="150" rx="10" fill="#1e2130"/>
+  <circle cx="70" cy="124" r="4" fill="#ff5f57"/><circle cx="84" cy="124" r="4" fill="#febc2e"/><circle cx="98" cy="124" r="4" fill="#28c840"/>
+  <g font-family="'SF Mono', Menlo, Consolas, monospace" font-size="13">
+    <text x="68" y="158" fill="#7CFC9A">$ <tspan fill="#e6e8ef">python3 setup.py</tspan></text>
+    <text x="68" y="184" fill="#9aa3b5">Jordan (Default) label: <tspan fill="#e6e8ef">Work</tspan></text>
+    <text x="68" y="206" fill="#9aa3b5">Jordan (Profile 1) label: <tspan fill="#e6e8ef">School</tspan></text>
+    <text x="68" y="228" fill="#9aa3b5">Jordan (Profile 2) label: <tspan fill="#e6e8ef">Personal</tspan></text>
+    <text x="68" y="250" fill="#7CFC9A">✓ <tspan fill="#e6e8ef">Apps built.</tspan></text>
+  </g>
+
+  <path d="M396 165h20" stroke="#8a93a6" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- Step 2: extension -->
+  <g filter="url(#card)"><rect x="420" y="30" width="360" height="270" rx="18" fill="#fff"/></g>
+  <text x="444" y="66" font-size="13" font-weight="700" fill="#5b4bb7" letter-spacing="1">STEP 2</text>
+  <text x="444" y="90" font-size="18" font-weight="700" fill="#1d1d1f">Add the helper extension</text>
+  <rect x="444" y="110" width="312" height="150" rx="10" fill="#f5f6f8" stroke="#e1e5ec"/>
+  <rect x="456" y="122" width="288" height="22" rx="11" fill="#e9ecf1"/>
+  <text x="470" y="137" font-size="11" fill="#6b7280">chrome://extensions</text>
+  <text x="732" y="137" font-size="11" fill="#6b7280" text-anchor="end">Developer mode</text>
+  <rect x="456" y="156" width="104" height="26" rx="6" fill="#0a6cff"/>
+  <text x="508" y="173" font-size="11" font-weight="600" fill="#fff" text-anchor="middle">Load unpacked</text>
+  <rect x="456" y="194" width="288" height="54" rx="8" fill="#fff" stroke="#e1e5ec"/>
+  <rect x="468" y="206" width="30" height="30" rx="7" fill="#1a3a6e"/>
+  <text x="483" y="227" font-size="15" font-weight="800" fill="#fff" text-anchor="middle">W</text>
+  <text x="510" y="218" font-size="13" font-weight="600" fill="#1d1d1f">ProfileDock Window Bridge</text>
+  <text x="510" y="234" font-size="11" fill="#6b7280">Connects this profile's windows</text>
+  <rect x="704" y="212" width="28" height="16" rx="8" fill="#0a6cff"/>
+  <circle cx="724" cy="220" r="6" fill="#fff"/>
+
+  <path d="M786 165h20" stroke="#8a93a6" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- Step 3: dock -->
+  <g filter="url(#card)"><rect x="810" y="30" width="360" height="270" rx="18" fill="#fff"/></g>
+  <text x="834" y="66" font-size="13" font-weight="700" fill="#5b4bb7" letter-spacing="1">STEP 3</text>
+  <text x="834" y="90" font-size="18" font-weight="700" fill="#1d1d1f">Drag the icons to your Dock</text>
+  <rect x="834" y="110" width="312" height="150" rx="10" fill="#e8ecf6"/>
+  <rect x="852" y="198" width="276" height="50" rx="14" fill="#fff" fill-opacity="0.7" stroke="#cdd3e0"/>
+  <rect x="868" y="206" width="34" height="34" rx="8" fill="#c9cfdb"/>
+  <rect x="910" y="206" width="34" height="34" rx="8" fill="#c9cfdb"/>
+  <rect x="952" y="206" width="34" height="34" rx="8" fill="#1a3a6e"/>
+  <text x="969" y="229" font-size="17" font-weight="800" fill="#fff" text-anchor="middle">W</text>
+  <rect x="994" y="206" width="34" height="34" rx="8" fill="#3a8bc9"/>
+  <text x="1011" y="229" font-size="17" font-weight="800" fill="#fff" text-anchor="middle">S</text>
+  <rect x="1036" y="206" width="34" height="34" rx="8" fill="#fff" stroke="#228a5c" stroke-width="2" stroke-dasharray="4 3"/>
+  <g transform="translate(1066 124) rotate(-8)">
+    <rect width="44" height="44" rx="10" fill="#228a5c"/>
+    <text x="22" y="30" font-size="22" font-weight="800" fill="#fff" text-anchor="middle">P</text>
+  </g>
+  <path d="M1080 172 q -6 18 -22 30" stroke="#228a5c" stroke-width="2" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <path d="M1100 160l0 20 5-4.5 3.4 7.8 3.2-1.4-3.4-7.6 6.8-.3z" fill="#111" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/>
+</svg>
